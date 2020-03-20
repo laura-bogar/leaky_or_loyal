@@ -1,0 +1,502 @@
+---
+title: "Leaky / Loyal 1"
+author: "Kristen Klitgaard"
+date: "3/12/2020"
+output:
+  html_document: default
+  pdf_document: default
+---
+# I. The Model
+
+Table of contents? what's in this file; what's in other files?
+1. One-fungus "base" model
+2. One-fungus, two seasons (varying different fungal parameters)
+3. Two-fungus code
+
+What is the model attempting to capture?
+The model is attempting to capture portfolio dynamics of a tree that has multiple mycorrhizal fungal partners (most likely ectos). To do this, it looks at a system with one plant that has two fungal partners. The plant provides carbon to the fungi and in return the fungi provides nutrients (N,P,K) to the plant. The two fungal partners (A and B) vary in quality by different seasons (fungus A is better in season 1, and fungus B is poorer, in season 2 they flip and B is better). The plant invests in the two fungi based on the environment it is in, and we assume that the plant "knows" which fungi is better and acts accordingly (evolutionary time scale). This investment will determine which fungi will be present on the rooting system.
+
+The model is ultimately trying to answer the question: What is the best investment strategy for the plant (based on environmental heterogeneity)? 
+
+a) Loyal Strategy - the plant completely commits (only invests) to the better partner. Potentially puts the tree in a bad spot when the environment/season flips. 
+b) Leaky Strategy - the plant always maintains some of both partners ("leaking" carbon to the lesser partner) in a "bet-hedging" strategy. But, could the tree be too leaky? Is this bad with longer periods of one environmental condition?
+
+What other models did I try?
+Originally we tried to adapt the Neuhauser & Forgione equations, which was essentially a modified Lotka-Volterra model. However within this model the plant must grow to a carrying capacity, which makes sense on a community level, but does not make sense when considering an individual tree, which grows indeterminately. We kept the exquation for the fungal growth, but modified the plant growth equation.
+This first model had the following equation for the plant growth:
+$$
+\begin{align}
+\frac{dP}{dt} &= gP(1-\frac{P}{K + gamma_{A}A})-r_{A}AP \\
+\end{align}
+$$
+In this, K represents the plant's carrying capacity, gamma represents the plant's growth benefit from the fungus (A or B).
+We then tried another implicit model, where the equation for plant growth was: 
+$$
+\begin{align}
+\frac{dP}{dt} &= P[g+ gamma_{A}A - r_{A}A -s(1+m_{P}P)] \\ 
+\end{align}
+$$
+I did quite a bit of work with this model, but I think ultimately it was really sensitive. The plant wasn't able to grow on its own without the fungus, and the model would sort of explode when I entered some parameter values. This led us to the current model, which is a mechanistic approach that tracks exactly how the fungus aids in plant growth. It includes equations for the nutrient pool in the soil and in the tree. 
+
+What does this model contain (equations explained in words)?
+In this model the tree provides the fungi with carbon in exchange for nutrients provided by the fungus, increasing the plant's growth. The model is mechanistic in its approach to describe this exchange. 
+
+The fungus' growth depends on a carbon "reward" (r_A) received by the plant, which is modified by how efficient the fungus is at converting the plant's carbon into its own usuable form (e_A), and the size of the plant (P). The fungus dies by a density independent (and density dependent (d_A) death rate. 
+
+The plant grows according to its growth rate (g), which is modified by the nutrients that are available within the plant (N_P) and the overall size of the plant. It experiences loss from the reward it gives to the fungus, and also according to density independent (s, ie senescence) and density dependent (d_P) death rates.
+
+The nutrient pool within the tree is dependent on the uptake rate of the plant (u_P), modified by the size of the plant and the size of the soil nutrient pool. It also depends on the uptake rate of the fungus, modified by the fungus' size and the size of the soil nutrient pool. The nutrient pool in the plant also has a loss term (l), because all biology is a little leaky. 
+
+The nutrient pool in the soil is just the inverse of the nutrient pool of the plant. 
+
+
+Model Equations
+$$
+\begin{align}
+\frac{dP}{dt} &= P[g \frac{N_{P}}{P} - r_{A} A - s (1 + d_{P} P) ] \\ 
+\newline
+\frac{dA}{dt} &= A[e_{A} r_{A} P - m_{A} - d_{A}A) ]\\ 
+\newline
+\frac{dN_{P}}{dt} &= u_{P} P N_{S} + u_{A} A N_{S} - l N_{P} \\ 
+\newline
+\frac{dN_{S}}{dt} &= - u_{P} P N_{S} - u_{A} A N_{S} +l N_{P} \\
+\end{align}
+$$
+
+State Variables 
+
+P = individual plant biomass (tree)
+A = individual fungus biomass
+N_P = Nutrient pool in the plant
+N_S = Nutrient pool in the soil
+
+Parameters
+
+g = growth rate of tree
+s = senescence. density independent mortality of tree (loss of leaves, branches, etc)
+d_P = density dependent mortality of tree (as a tree gets bigger, more likely to get hit by lightning etc.)
+r_A = rewards (in C) of tree to fungus. cost for tree, gain for fungus. 
+e_A = efficiency of conversion for tree C to fungus C. 
+m_A = density independent mortality of fungus
+d_A = density independent mortality of fungus
+u_P = nutrient uptake rate of tree 
+u_A = nutrient uptake rate of fungus
+l = leakiness of tree. nutrients that leave the tree and reenter the soil pool (decomposed leaves, root leakiness, etc.)
+
+Parameter Set
+```{r}
+g = 5 #growth rate of tree is higher than fungus
+s = 1 #senescence is low compared to growth rate
+e_A = .1 #standard energy flow between two trophic levels
+r_A = .8 #close to optimal investment (see IV.)
+m_A = 0 #set to zero so ZNGI goes through origin (see III.)
+u_A = 1 #uptake of fungus is greater than plant to provide benefit ... ensure mutualism
+u_P = 0.01 #uptake of plant lower than fungus 
+l = 1 #small compared to total pool
+d_A = 1 #easy value
+d_P = 0 #set to zero to prevent equations from being insane
+N_T = 5 #initial soil nutrient pool level
+```
+
+
+# II. Timeseries (1 fungus, no seasons)
+
+For loop to plot timeseries of one plant, one fungus, no seasons
+```{r}
+tset <- seq(from = 0, to = 1000, length.out = 5000) #create a time vector going from 0 to 1000. these numbers are fairly arbitrary, but good to show multiple "seasons" of length 200 later.
+P.simu <- NaN*tset; P.simu[1] <- .1
+A.simu <- NaN*tset; A.simu[1] <- .1 #both tree and plant start small, but not at zero. model if for growth, not generation.
+Np.simu <- NaN*tset; Np.simu[1] <- .1 #relatively arbitrary start number. 
+Ns.simu <- NaN*tset; Ns.simu[1] <- N_T - Np.simu[1] #Nutrients in plant (Np) and nutrients in soil (Ns) add to total nutrients in system (Nt)
+
+for(i in 2:length(tset)){ #for loop with the equations for N, P, Np, and Ns within the model. 
+  dt <- tset[i] - tset[i-1]
+  P <- P.simu[i-1]
+  A <- A.simu[i-1]
+  N_P <- Np.simu[i-1]
+  N_S <- Ns.simu[i-1]
+  dP <- (P* (g*N_P/P - r_A*A - s*(1+d_P*P)))*dt
+  dA <- (A* (e_A*r_A*P-m_A-d_A*A))*dt
+  dNp <- (u_P*P*N_S + u_A*A*N_S - l*N_P)*dt
+  dNs <- (-u_P*P*N_S - u_A*A*N_S + l*N_P)*dt
+  P.simu[i] <- P + dP
+  A.simu[i] <- A + dA
+  Np.simu[i] <- N_P + dNp
+  Ns.simu[i] <- N_S + dNs
+  
+}
+
+Pcol <- 'forestgreen' #color of P in graphs
+Acol <- 'darksalmon' #color of A in graphs
+
+```
+
+Plot the timeseries graph.
+```{r}
+plot(x = tset, y = P.simu, type = 'l', col=Pcol, las = 1, lwd=2, xlab = 'Time', ylab = 'Biomass in C', ylim = c(0, max(c(P.simu,A.simu))))
+abline(h = 0) # I like to have this line as a reference
+lines(x = tset, y = A.simu, col = Acol, lwd = 2)
+legend(x = max(tset)*0.5, y = .35*max(c(P.simu,A.simu)), legend=c('P','A'),lwd= 2, col=c(Pcol,Acol), horiz=TRUE)
+
+tail(P.simu)
+tail(A.simu) #tail functions allow you to see what the plant / fungus grows to in the end.
+```
+
+Tree grows to 6.524626, Fungus grows to 0.5219701
+
+Tree grows much faster than fungus, gives model slight kink. Tree rapidly grows to max obtainable size without fungus. Then when the fungus begins to grow, tree grows more. 
+
+Plot timeseries again, this time with a smaller xlim to show the kink in more detail.
+```{r}
+plot(x = tset, y = P.simu, type = 'l', col=Pcol, las = 1, lwd=2, xlab = 'Time', ylab = 'Biomass in C', xlim = c(0, 30), ylim = c(0, max(c(P.simu,A.simu)))) #reduced xlim to show the kink in the model up close.
+abline(h = 0)
+lines(x = tset, y = A.simu, col = Acol, lwd = 2)
+legend(x = 20, y = .35*max(c(P.simu,A.simu)), legend=c('P','A'),lwd= 2, col=c(Pcol,Acol), horiz=TRUE)
+```
+
+
+
+# III. ZNGIs
+
+Some of the algebra used to derive the below ZNGI equations. It's gnarly. 
+$$
+\begin{align}
+\frac{dP}{dt} &= P[g \frac{N_{P}}{P} - r_{A} A - s (1 + d_{P} P) ] \\
+0 &= \frac{gN_{P}}{P} - r_{A}A - s(1+d_{P}P) \\
+0 &= \frac{g}{P}(\frac{N_{T}(u_{P}P+u_{A}A)}{u_{P}P+u_{A}A + l}) - r_{A}A - s(1+d_{P}P) \\
+0 &= gN_{T}u_{P}P+gN_{T}u_{A}A + (u_{P}P^2+u_{A}AP + lP)(-r_{A}A-s-sd_{P}P) \\
+0 &= A^2(-u_{A}r_{A}P) + A(gN_{T}u_{A} - r_{A}u_{P}P^2 - su_{A}P - sd_{P}u_{A}P^2 - r_{A}lP) + gN_{T}u_{P}P - su_{P}P^2 - sd_{p}u_{p}P^3 - slP - sld_{P}P^2 \\
+\end{align}
+$$
+
+Plot ZNGIs - Allows us to see if equilibria are stable or unstable
+```{r}
+Pset <- seq(from = 0, to = 10,length.out=1000)	
+
+a = -u_A*r_A*Pset
+b = g*N_T*u_A - u_P*r_A*(Pset)^(2) - s*u_A*Pset - s*d_P*u_A*(Pset)^(2) - l*r_A*Pset
+c = g*N_T*u_P*Pset - u_P*s*(Pset)^(2) - u_P*s*d_P*(Pset)^(3) - s*d_P*l*(Pset)^(2) - s*l*Pset
+
+#the math for these is kind of gnarly. I did it by hand and then put some equations in here that were simplified as far as I could make them. above I put long equations into short holding variables so that they were more manageable for the equations below. a, b, and c are chosen because I had to use the quadratic formula in the algebraic solution, the results of which create the ZNGI lines.
+
+# ^ which equations were you solving to get to these a, b, and c expressions?
+
+dPdt.ZNGI <- (-(b) - (sqrt(b^2 - 4*a*c))) / (2*a)
+dAdt.ZNGI <- (e_A*r_A*Pset - m_A) / d_A
+dPdt.ZNGI.2 <- (-b + sqrt(b^2 - 4*a*c)) / (2*a)
+
+#establish a color for the plant and fungus that will be used throughout the simulations
+Pcol <- 'forestgreen'
+Acol <- 'darksalmon'
+
+#plot ZNGIs!
+plot(x = dPdt.ZNGI, y = Pset, type = 'l', col = Pcol, lwd = 2, ylim=c(0,10),xlim=c(0,15), ylab = 'P', xlab = 'A',las=1)
+lines(x = dAdt.ZNGI, y = Pset, lwd = 2, col = Acol)
+abline(h = 0, lwd = 2, col = Pcol)
+abline(v = 0, lwd = 2, col= Acol)
+lines(x = dPdt.ZNGI.2, y = Pset, lwd = 2, col = 'dodgerblue')
+legend(x = 8, y = 6, legend=c('P -','P +','A'),lwd= 2, col=c(Pcol,'dodgerblue',Acol), horiz=TRUE)
+```
+
+Two lines needed to make the P ZNGI because it is a quadratic equation. The blue line is the P ZNGI using the positive root in the quadratic equation, while the green line is the P ZNGI using the negative root in the quadratic equation. NaN gap because the math is gnarly. But the graph still gives you the idea of how it all works. 
+
+Plot timeseries on ZNGIs to show at which equilibria the system will settle. 
+```{r}
+plot(x = dPdt.ZNGI, y = Pset, type = 'l', col = Pcol, lwd = 2, ylim=c(0,10),xlim=c(0,15), ylab = 'P', xlab = 'A',las=1)
+lines(x = dAdt.ZNGI, y = Pset, lwd = 2, col = Acol)
+lines(x = A.simu, y = P.simu, lwd = 2, col = 'gray30')
+points(x = A.simu[length(tset)], y = P.simu[length(tset)], pch = 21, bg= 'black') #add a solid point at intersection of P+ and A to demonstrate stability of equilibrium. 
+abline(h = 0, lwd = 2, col = Pcol)
+abline(v = 0, lwd = 2, col= Acol)
+lines(x = dPdt.ZNGI.2, y = Pset, lwd = 2, col = 'dodgerblue')
+legend(x = 8, y = 6, legend=c('P -','P +','A'),lwd= 2, col=c(Pcol,'dodgerblue',Acol), horiz=TRUE)
+```
+
+ZNGI shows that there is a stable equilibrium where both the plant and the fungus exist. Basically just a check on the math to make sure it's working well. 
+
+
+# IV. Optimal r_A
+
+The maximum biomass that the tree can grow to (P*) depends on what it is investing into its fungal partner. The following shows how P(star) varies by investment (r_A). This is also one way to determine the optimal investment (very numerical method).
+```{r}
+tset <- seq(from = 0, to = 100, length.out = 1000)
+rA_set <- seq(from = 0, to = 5, length.out = 1000) #vector of potential values for tree investment in fungus, ranging from 1-5
+Pstar_set <- NaN*rA_set
+
+for( j in 1:length(rA_set)){ #for loop commanding rA value that the model will use
+  r_A = rA_set[j] #rA used in equations will be one of the values within rA_set
+  P.simu <- NaN*tset; P.simu[1] <- .1 #these could be taken out of the for loop if you wanted. I just keep them in from habit.
+  A.simu <- NaN*tset; A.simu[1] <- .1
+  Np.simu <- NaN*tset; Np.simu[1] <- .1
+  Ns.simu <- NaN*tset; Ns.simu[1] <- N_T - Np.simu[1]
+  
+  for (i in 2:length(tset)){ #the model for loop. must be second loop because we're iterating over a different vector (time). the equations in this loop are now using different values of r_A that the previous loop is instructing it in, which allows us to see which value of r_A will cause the plant to grow the most. 
+    dt <- tset[i] - tset[i-1]
+    P <- P.simu[i-1]
+    A <- A.simu[i-1]
+    N_P <- Np.simu[i-1]
+    N_S <- Ns.simu[i-1]
+    dP <- (P* (g*N_P/P - r_A*A - s*(1+d_P*P)))*dt
+    dA <- (A* (e_A*r_A*P-m_A-d_A*A))*dt
+    dNp <- (u_P*P*N_S + u_A*A*N_S - l*N_P)*dt
+    dNs <- (-u_P*P*N_S - u_A*A*N_S + l*N_P)*dt
+    P.simu[i] <- P + dP
+    A.simu[i] <- A + dA
+    Np.simu[i] <- N_P + dNp
+    Ns.simu[i] <- N_S + dNs
+    
+  }
+  
+  Pstar_set[j] <- P.simu[length(tset)] #the maximum height of the tree (the end of the simulation) is recorded in a new vector.
+}
+
+max.Pstar <- which.max(Pstar_set) #the place in the vector that hold the largest tree growth value
+optimal.rA <- rA_set[max.Pstar] #the value of r_A that corresponds to the largest tree growth value
+
+plot(x = rA_set, y = Pstar_set, type = 'l', col = Pcol, las = 1, lwd = 2, xlab = 'Tree investment in fungus (r_A)', ylab = 'Maximum growth of Plant (P*)', ylim = c(0, 7))
+
+optimal.rA #to see the specific value
+```
+
+The peak of this green line is the optimal rA (value of rA that maximizes plant growth).
+
+Loop to find optimal r_A, whittle technique. 
+This technique allows us to get a more specific approximation of the optimal r_A with fewer iterations. 
+```{r}
+rA_low <- 0; #establish the lower bound for the value of rA that the loop will test
+rA_high <- 5; #upper bound for value of rA that the loop will test
+
+tset <- seq(from = 0, to = 100, length.out = 1000)
+
+for(k in 1:5){ #number of times whole loop will be run through. increase from 5 to increase specificity
+  
+rA_set <- seq(from = rA_low, to = rA_high, length.out = 10)
+Pstar_set <- NaN*rA_set
+
+for( j in 1:length(rA_set)){ #for loop commanding rA value that the model will use
+  r_A = rA_set[j]
+  P.simu <- NaN*tset; P.simu[1] <- .1
+  A.simu <- NaN*tset; A.simu[1] <- .1
+  Np.simu <- NaN*tset; Np.simu[1] <- 1
+  Ns.simu <- NaN*tset; Ns.simu[1] <- N_T - Np.simu[1]
+  
+  for (i in 2:length(tset)){ #the model for loop. contains model equations.
+    dt <- tset[i] - tset[i-1]
+    P <- P.simu[i-1]
+    A <- A.simu[i-1]
+    N_P <- Np.simu[i-1]
+    N_S <- Ns.simu[i-1]
+    dP <- (P* (g*N_P/P - r_A*A - s*(1+d_P*P)))*dt
+    dA <- (A* (e_A*r_A*P-m_A-d_A*A))*dt
+    dNp <- (u_P*P*N_S + u_A*A*N_S - l*N_P)*dt
+    dNs <- (-u_P*P*N_S - u_A*A*N_S + l*N_P)*dt
+    P.simu[i] <- P + dP
+    A.simu[i] <- A + dA
+    Np.simu[i] <- N_P + dNp
+    Ns.simu[i] <- N_S + dNs
+    
+  }
+  
+  Pstar_set[j] <- P.simu[length(tset)] #the maximum growth of the plant (the end of the simulation) is recorded in a new vector, called Pstar
+}
+
+max.Pstar <- which.max(Pstar_set) #outputs the location of the highest value of Pstar (plant growth)
+optimal.rA <- rA_set[max.Pstar] #outputs the value of rA that corresponds to the highest value of Pstar (plant growth)
+
+rA_low <- rA_set[max(1,max.Pstar-1)]  #establishes a new lower bound for rA that is one below the previous max_rA established
+rA_high <- rA_set[min(length(rA_set),max.Pstar+1)] #establishes a new upper bound for rA that is one above the previous max rA established. 
+#the next round of the loop (the next 'k' from the outermost for loop) will proceed with these new rA bounds, allowing it to get closer to the true value of the optimal rA
+
+
+}
+
+optimal.rA
+max(Pstar_set)
+max(A.simu)
+```
+
+
+
+# V. Optimal r_A as a function of d_A, e_A, and u_A
+
+Bifurcation diagrams of r_A by all of these parameters
+
+How does the optimal investment vary with d_A (the density dependent mortality of the fungus)?
+The following code constructs a bifurcation diagram of r_A by d_A. 
+```{r}
+tset <- seq(from = 0, to = 100, length.out = 1000)
+rA_set <- seq(from = 0, to = 5, length.out = 1000)
+Pstar_set <- NaN*rA_set
+dA.set <- seq(0.1,3,length.out = 100) #values chosen because the model won't run outside of these bounds. I tested this by plugging in individual numbers into the model, so these are not super refined numbers. 
+rA.star <- NaN*dA.set
+
+for(k in 1:length(dA.set)){ #this for loop varies d_A
+  d_A = dA.set[k]
+
+for( j in 1:length(rA_set)){ #this for loop varies r_A
+  r_A = rA_set[j]
+  P.simu <- NaN*tset; P.simu[1] <- .1
+  A.simu <- NaN*tset; A.simu[1] <- .1
+  Np.simu <- NaN*tset; Np.simu[1] <- 1
+  Ns.simu <- NaN*tset; Ns.simu[1] <- N_T - Np.simu[1]
+  
+  for (i in 2:length(tset)){ #the model
+    dt <- tset[i] - tset[i-1]
+    P <- P.simu[i-1]
+    A <- A.simu[i-1]
+    N_P <- Np.simu[i-1]
+    N_S <- Ns.simu[i-1]
+    dP <- (P* (g*N_P/P - r_A*A - s*(1+d_P*P)))*dt
+    dA <- (A* (e_A*r_A*P-m_A-d_A*A))*dt
+    dNp <- (u_P*P*N_S + u_A*A*N_S - l*N_P)*dt
+    dNs <- (-u_P*P*N_S - u_A*A*N_S + l*N_P)*dt
+    P.simu[i] <- P + dP
+    A.simu[i] <- A + dA
+    Np.simu[i] <- N_P + dNp
+    Ns.simu[i] <- N_S + dNs
+    
+  }
+  
+  Pstar_set[j] <- P.simu[length(tset)]
+  max.Pstar <- which.max(Pstar_set)
+  optimal.rA <- rA_set[max.Pstar]
+}
+  rA.star[k] <- optimal.rA #holding vector for all of the optimal rAs created
+}
+```
+
+Plot the previous chunk!
+```{r}
+plot(x = dA.set, y = rA.star, type = 'l', col = 'indianred', las = 1, lwd = 2, xlab = 'd_A', ylab = 'r_A', ylim = c(0, max(rA.star)))
+```
+
+As you increase the density dependent mortality of the fungus, you increase the optimal investment of the tree (tree must accomodate the inhibited fungus!)
+
+Reset Parameters
+```{r}
+g = 5 #growth rate of tree is higher than fungus
+s = 1 #senescence is low compared to growth rate
+e_A = .1 #standard energy flow between two trophic levels
+r_A = .8 #close to optimal investment (see IV.)
+m_A = 0 #set to zero so ZNGI goes through origin (see III.)
+u_A = 1 #uptake of fungus is greater than plant to provide benefit ... ensure mutualism
+u_P = 0.01 #uptake of plant lower than fungus 
+l = 1 #small compared to total pool
+d_A = 1 #easy value
+d_P = 0 #set to zero to prevent equations from being insane
+N_T = 5 #initial soil nutrient pool level
+```
+
+Optimal r_A also varies with e_A (efficiency of conversion)
+This has the same format of code as the last chunk, just running it for e_A instead or r_A. 
+```{r}
+tset <- seq(from = 0, to = 100, length.out = 1000)
+rA_set <- seq(from = 0, to = 5, length.out = 1000)
+Pstar_set <- NaN*rA_set
+eA.set <- seq(0.04,1,length.out = 100) #values chosen because the model won't run outside of these bounds.
+rA.star <- NaN*eA.set
+
+for(k in 1:length(eA.set)){ #this for loop varies e_A
+  e_A = eA.set[k]
+
+for( j in 1:length(rA_set)){ #this for loop varies r_A
+  r_A = rA_set[j]
+  P.simu <- NaN*tset; P.simu[1] <- .1
+  A.simu <- NaN*tset; A.simu[1] <- .1
+  Np.simu <- NaN*tset; Np.simu[1] <- 1
+  Ns.simu <- NaN*tset; Ns.simu[1] <- N_T - Np.simu[1]
+  
+  for (i in 2:length(tset)){ #the model
+    dt <- tset[i] - tset[i-1]
+    P <- P.simu[i-1]
+    A <- A.simu[i-1]
+    N_P <- Np.simu[i-1]
+    N_S <- Ns.simu[i-1]
+    dP <- (P* (g*N_P/P - r_A*A - s*(1+d_P*P)))*dt
+    dA <- (A* (e_A*r_A*P-m_A-d_A*A))*dt
+    dNp <- (u_P*P*N_S + u_A*A*N_S - l*N_P)*dt
+    dNs <- (-u_P*P*N_S - u_A*A*N_S + l*N_P)*dt
+    P.simu[i] <- P + dP
+    A.simu[i] <- A + dA
+    Np.simu[i] <- N_P + dNp
+    Ns.simu[i] <- N_S + dNs
+    
+  }
+  
+  Pstar_set[j] <- P.simu[length(tset)]
+  max.Pstar <- which.max(Pstar_set)
+  optimal.rA <- rA_set[max.Pstar]
+}
+  rA.star[k] <- optimal.rA #holding vector for all of the optimal rAs created
+}
+```
+
+```{r}
+plot(x = eA.set, y = rA.star, type = 'l', col = 'indianred1', las = 1, lwd = 2, xlab = 'e_A', ylab = 'r_A', ylim = c(0, max(rA.star)))
+```
+
+As you increase the efficiency of conversion, the optimal investment of the tree decreases exponentially. 
+
+Reset Parameters
+```{r}
+g = 5 #growth rate of tree is higher than fungus
+s = 1 #senescence is low compared to growth rate
+e_A = .1 #standard energy flow between two trophic levels
+r_A = .8 #close to optimal investment (see IV.)
+m_A = 0 #set to zero so ZNGI goes through origin (see III.)
+u_A = 1 #uptake of fungus is greater than plant to provide benefit ... ensure mutualism
+u_P = 0.01 #uptake of plant lower than fungus 
+l = 1 #small compared to total pool
+d_A = 1 #easy value
+d_P = 0 #set to zero to prevent equations from being insane
+N_T = 5 #initial soil nutrient pool level
+```
+
+Optimal r_A varies according to u_A (fungal uptake rate)
+```{r}
+tset <- seq(from = 0, to = 100, length.out = 1000)
+rA_set <- seq(from = 0.1, to = 5, length.out = 1000)
+Pstar_set <- NaN*rA_set
+uA.set <- seq(0.4,10,length.out = 100) #values chosen because the model won't run outside of these bounds.
+rA.star <- NaN*uA.set
+
+for(k in 1:length(uA.set)){ #this for loop varies u_A
+  u_A = uA.set[k]
+
+for( j in 1:length(rA_set)){ #this for loop varies r_A
+  r_A = rA_set[j]
+  P.simu <- NaN*tset; P.simu[1] <- .1
+  A.simu <- NaN*tset; A.simu[1] <- .1
+  Np.simu <- NaN*tset; Np.simu[1] <- 1
+  Ns.simu <- NaN*tset; Ns.simu[1] <- N_T - Np.simu[1]
+  
+  for (i in 2:length(tset)){ #the model
+    dt <- tset[i] - tset[i-1]
+    P <- P.simu[i-1]
+    A <- A.simu[i-1]
+    N_P <- Np.simu[i-1]
+    N_S <- Ns.simu[i-1]
+    dP <- (P* (g*N_P/P - r_A*A - s*(1+d_P*P)))*dt
+    dA <- (A* (e_A*r_A*P-m_A-d_A*A))*dt
+    dNp <- (u_P*P*N_S + u_A*A*N_S - l*N_P)*dt
+    dNs <- (-u_P*P*N_S - u_A*A*N_S + l*N_P)*dt
+    P.simu[i] <- P + dP
+    A.simu[i] <- A + dA
+    Np.simu[i] <- N_P + dNp
+    Ns.simu[i] <- N_S + dNs
+    
+  }
+  
+  Pstar_set[j] <- P.simu[length(tset)]
+  max.Pstar <- which.max(Pstar_set)
+  optimal.rA <- rA_set[max.Pstar]
+}
+  rA.star[k] <- optimal.rA
+}
+```
+
+```{r}
+plot(x = uA.set, y = rA.star, type = 'l', col = 'indianred2', las = 1, lwd = 2, xlab = 'u_A', ylab = 'r_A', ylim = c(0, max(rA.star)))
+```
+
+As you increase the fungal uptake rate, the optimal investment of the tree decreases exponentially. 
