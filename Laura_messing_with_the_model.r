@@ -65,7 +65,9 @@ Acol <- 'darksalmon' #color of A in graphs
 
 simulation_results = data.frame(time = tset, Plant = P.simu, Fungus = A.simu)
 
-ggplot(simulation_results, aes(x = time, y = Plant)) +
+longform = simulation_results %>% gather(organism, "Biomass", -time)
+
+ggplot(longform, aes(x = time, y = Biomass, group = organism, color = organism)) +
   geom_line()
 
 # plot(x = tset, y = P.simu, type = 'l', col=Pcol, las = 1, lwd=2, xlab = 'Time', ylab = 'Biomass in C', ylim = c(0, max(c(P.simu,A.simu))))
