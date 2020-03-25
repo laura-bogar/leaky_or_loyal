@@ -1,0 +1,200 @@
+---
+title: "Laura_attempts_holy_grail_figure"
+author: "Laura Bogar"
+date: "3/24/2020"
+output: html_document
+---
+
+I would like to build on the work that Kristin Klitgaard did to build the "Holy Grail" figure that Holly described:
+P (plant biomass) will be on the y axis, with the proportion of time spent in env. A vs env. B on the x axis (all A, 50/50, all B). There will be three lines plotted, representing plants with just fungus A, plants with just fungus B, and plants with both fungi. Line A will start high in the all A environment, and end low; B will do the opposite. The tree with two fungi will show a hump in the middle (variable environment is best).
+
+I would like to:
+1) Make seasons longer so the curves are smoother. (New 400 value is not taking).
+2) Optimize plant allocation in single-season, two-fungus situations to parameterize changing seasons.
+
+Kristin did a great job setting up the following definitions:
+
+State Variables 
+
+P = individual plant biomass (tree)
+A = individual fungus A biomass
+B = individual fungus B biomass
+N_P = Nutrient pool in the plant
+N_S = Nutrient pool in the soil
+
+Parameters
+
+g = growth rate of tree
+s = senescence. density independent mortality of tree (loss of leaves, branches, etc)
+d_P = density dependent mortality of tree (as a tree gets bigger, more likely to get hit by lightning etc.)
+r_A = rewards (in C) of tree to fungus. cost for tree, gain for fungus. 
+e_A = efficiency of conversion for tree C to fungus C. 
+m_A = density independent mortality of fungus
+d_A = density independent mortality of fungus
+u_P = nutrient uptake rate of tree 
+u_A = nutrient uptake rate of fungus
+l = leakiness of tree. nutrients that leave the tree and reenter the soil pool (decomposed leaves, root leakiness, etc.)
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+```{r}
+# Load required packages
+require(tidyverse)
+```
+Parameter Set
+
+NOTES TO LAURA:
+- efficiency of 0.1 is so low! Is this right for fungi munching on tree sugars?
+
+```{r}
+g = 5 #growth rate of tree is higher than fungus
+s = 1 #senescence is low compared to growth rate
+e_A = .1 #standard energy flow between two trophic levels
+e_B = .1 #standard energy flow between two trophic levels
+r_A = 0.4 # 0.8 was close to optimal investment for single fungus (see IV.)
+r_B = 0.4 # NOT BASED ON ANYTHING RIGHT NOW.
+m_A = 0 #set to zero so ZNGI goes through origin (see III.)
+m_B = 0
+u_A = 1 #uptake of fungus is greater than plant to provide benefit ... ensure mutualism
+u_B = 1
+u_P = 0.01 #uptake of plant lower than fungus 
+l = 1 #small compared to total pool
+d_A = 1 #easy value
+d_B = 1.5 # greater density-independent mortality than A
+d_P = 0 #set to zero to prevent equations from being insane
+N_T = 5 #initial soil nutrient pool level
+```
+
+Arbitrary initial values:
+```{r}
+timespan = 2000 # If we say each time point is one day, two thousand days will allow us to observe a bit more than 5 years of tree decision-making
+P_init = 0.1 # initialize biomass as non-zero small number
+A_init = 0.1
+B_init = 0.1
+Np_init = 0.1 # arbitrary initial nitrogen concentration for plant
+```
+Setting up the simulations:
+```{r}
+timepoints = 0:timespan #create a time vector going from 0 to the maximum time span we want to examine.
+P.simu = NaN*timepoints; P.simu[1] = P_init # initialize simulated plant biomass
+A.simu = NaN*timepoints; A.simu[1] = A_init # initialize simulated fungus A biomass
+B.simu = NaN*timepoints; B.simu[1] = B_init
+Np.simu = NaN*timepoints; Np.simu[1] = .1 #relatively arbitrary start number. 
+Ns.simu = NaN*timepoints; Ns.simu[1] = N_T - Np.simu[1] #Nutrients in plant (Np) and nutrients in soil (Ns) add to total nutrients in system (N_T)
+```
+
+Simulate plant and fungal biomass in the absence of seasons:
+```{r}
+for(i in 2:length(timepoints)){ #for loop with the equations for N, P, Np, and Ns within the model. 
+  dt = timepoints[i] - timepoints[i-1]
+  P = P.simu[i-1]
+  A = A.simu[i-1]
+  B = B.simu[i-1]
+  N_P = Np.simu[i-1]
+  N_S = Ns.simu[i-1]
+  dP = (P* (g*N_P/P - r_A*A - s*(1+d_P*P)))*dt
+  dA = (A* (e_A*r_A*P-m_A-d_A*A))*dt
+  dB = (B* (e_B*r_B*P - m_B-d_B*B))*dt
+  dNp = (u_P*P*N_S + u_A*A*N_S - l*N_P)*dt
+  dNs = (-u_P*P*N_S - u_A*A*N_S + l*N_P)*dt
+  P.simu[i] = P + dP
+  A.simu[i] = A + dA
+  B.simu[i] = B + dB
+  Np.simu[i] = N_P + dNp
+  Ns.simu[i] = N_S + dNs
+  
+}
+
+# And remodel the data to make plotting easier:
+simulation_results = data.frame(time = timepoints, Plant = P.simu, Fungus_A = A.simu, Fungus_B = B.simu)
+
+longform = simulation_results %>% gather(organism, "Biomass", -time)
+
+# Plot it
+ggplot(longform, aes(x = time, y = Biomass, group = organism, color = organism)) +
+  geom_line()
+
+```
+
+Great! It seems to be working.
+
+Let's add in seasons!
+```{r Adding seasons}
+seasonlength = 400 # let's say each season should last 100 days
+badseasonfactor = 1.5 # mortality in bad season will be this times 
+# the good season mortality. Currently same factor for both fungi.
+
+season = rep(c(rep("A", seasonlength), rep("B", seasonlength)), ceiling((max(timepoints)/seasonlength)))
+
+d_A.var = NaN*timepoints
+d_B.var = NaN*timepoints
+for (i in 1:length(timepoints)) {
+  if (season[i] == "A") {
+    d_A.var[i] = d_A
+    d_B.var[i] = d_B*badseasonfactor
+  } else if (season[i] == "B") {
+    d_A.var[i] = d_A*badseasonfactor
+    d_B.var[i] = d_B
+  }
+}
+
+# d_A.variable = rep(c(rep(d_A, seasonlength), rep(d_A*badseasonfactor, seasonlength)), ceiling((max(timepoints)/seasonlength)))
+# # This will generate slightly more d_A.e values than we need
+# # if we end up with a timepoints value that's not evenly 
+# # divisible by season, but this shouldn't be a problem for our 
+# # purposes. We can just ignore them!
+# 
+# d_B.variable = rep(c(rep(d_B*badseasonfactor, seasonlength), rep(d_B, seasonlength)), ceiling((max(timepoints)/seasonlength)))
+
+# Below, find Kristin's slightly more elegant solution:
+# for(i in 1:length(tset)){ #for loop to vary the values of d_A by season
+#   time <- tset[i]
+#   if(floor(time/switchfreq) %% 2 == 0){ #divide the current timestep by the switching frequency, then round it. if this value when divided by 2 has no remainder, then you find yourself in season 1, and d_A should be smaller. 
+#     d_A.e[i] <- d_A #d_A is the previously set value of 1
+#   } else{ #otherwise, you are in season 2!
+#     d_A.e[i] <- 1.5 #d_A is 50% greater, value of 1.5. value chosen to demonstrate difference. 
+#   }
+# }
+
+```
+```{r Simulation with two fungi and seasons}
+# Here, I am simply varying fungal mortality with season.
+# Kristin did something more sophisticated,
+# shifting plant allocation to each fungus
+# based on the season by finding optimal
+# single-fungus values in each condition.
+
+for(i in 2:length(timepoints)){
+  dt = timepoints[i] - timepoints[i-1]
+  P = P.simu[i-1]
+  A = A.simu[i-1]
+  B = B.simu[i-1]
+  N_P = Np.simu[i-1]
+  N_S = Ns.simu[i-1]
+  dP = (P* (g*N_P/P - r_A*A - s*(1+d_P*P)))*dt
+  dA = (A* (e_A*r_A*P-m_A-d_A.var[i]*A))*dt
+  dB = (B* (e_B*r_B*P - m_B-d_B.var[i]*B))*dt
+  dNp = (u_P*P*N_S + u_A*A*N_S - l*N_P)*dt
+  dNs = (-u_P*P*N_S - u_A*A*N_S + l*N_P)*dt
+  P.simu[i] = P + dP
+  A.simu[i] = A + dA
+  B.simu[i] = B + dB
+  Np.simu[i] = N_P + dNp
+  Ns.simu[i] = N_S + dNs
+  
+}
+
+# And remodel the data to make plotting easier:
+simulation_results = data.frame(time = timepoints, Plant = P.simu, Fungus_A = A.simu, Fungus_B = B.simu)
+
+longform = simulation_results %>% gather(organism, "Biomass", -time)
+
+# Plot it
+ggplot(longform, aes(x = time, y = Biomass, group = organism, color = organism)) +
+  geom_line()
+
+```
+
+This is a weird and spiky graph!
